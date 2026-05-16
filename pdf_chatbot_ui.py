@@ -4,7 +4,9 @@ import streamlit as st
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
-from langchain_chroma import Chroma
+#from langchain_chroma import Chroma
+# NEW import
+from langchain_community.vectorstores import FAISS
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from dotenv import load_dotenv
@@ -77,11 +79,10 @@ with st.sidebar:
             chunks = splitter.split_documents(pages)
 
             # Create vector store
-            embeddings = OpenAIEmbeddings()
-            vectorstore = Chroma.from_documents(
+            vectorstore = FAISS.from_documents(
                 documents=chunks,
                 embedding=embeddings
-            )
+)
 
             # Save retriever to session state
             st.session_state.retriever = vectorstore.as_retriever(
