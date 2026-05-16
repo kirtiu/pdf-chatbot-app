@@ -79,6 +79,8 @@ with st.sidebar:
             chunks = splitter.split_documents(pages)
 
             # Create vector store
+            embeddings = OpenAIEmbeddings()
+
             vectorstore = FAISS.from_documents(
                 documents=chunks,
                 embedding=embeddings
