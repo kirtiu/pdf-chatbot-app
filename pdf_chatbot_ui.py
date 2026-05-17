@@ -1,174 +1,168 @@
-# File: C:/Users/kirti.upadhyay/Documents/AI_Learning/pdf_chatbot_ui.py
+# File: pdf_chatbot_ui.py (FULL UPDATED VERSION)
 
 import streamlit as st
-from langchain_community.document_loaders import PyPDFLoader
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_openai import OpenAIEmbeddings, ChatOpenAI
-#from langchain_chroma import Chroma
-# NEW import
-from langchain_community.vectorstores import FAISS
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.output_parsers import StrOutputParser
-from dotenv import load_dotenv
-import tempfile
 import os
+import time
 
-
-# ✅ Works both locally AND on cloud
+# ── API KEYS ──────────────────────────────────────────────
 if "OPENAI_API_KEY" in st.secrets:
     os.environ["OPENAI_API_KEY"] = st.secrets["OPENAI_API_KEY"]
 else:
     from dotenv import load_dotenv
     load_dotenv()
 
-# ════════════════════════════════════════
-# PAGE CONFIG — must be first st command!
-# ════════════════════════════════════════
+# ── LANGSMITH TRACING ─────────────────────────────────────
+if "LANGCHAIN_API_KEY" in st.secrets:
+    os.environ["LANGCHAIN_TRACING_V2"] = "true"
+    os.environ["LANGCHAIN_API_KEY"] = st.secrets["LANGCHAIN_API_KEY"]
+    os.environ["LANGCHAIN_PROJECT"] = st.secrets.get(
+        "LANGCHAIN_PROJECT", "pdf-chatbot"
+    )
+
+from langchain_community.document_loaders import PyPDFLoader
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_openai import OpenAIEmbeddings, ChatOpenAI
+from langchain_community.vectorstores import FAISS
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+import tempfile
+
+# ── PAGE CONFIG ───────────────────────────────────────────
 st.set_page_config(
     page_title="PDF AI Chatbot",
     page_icon="📄",
     layout="centered"
 )
 
-# ════════════════════════════════════════
-# TITLE & DESCRIPTION
-# ════════════════════════════════════════
 st.title("📄 PDF AI Chatbot")
 st.caption("Upload a PDF and ask anything about it!")
 
-# ════════════════════════════════════════
-# SESSION STATE — persists across reruns
-# ════════════════════════════════════════
+# ── SESSION STATE ─────────────────────────────────────────
 if "messages" not in st.session_state:
-    st.session_state.messages = []          # chat history
-
+    st.session_state.messages = []
 if "retriever" not in st.session_state:
-    st.session_state.retriever = None       # RAG retriever
-
+    st.session_state.retriever = None
 if "pdf_loaded" not in st.session_state:
-    st.session_state.pdf_loaded = False     # PDF status
+    st.session_state.pdf_loaded = False
+if "metrics" not in st.session_state:
+    st.session_state.metrics = {
+        "total_questions": 0,
+        "total_response_time": 0.0,
+        "questions_log": []
+    }
 
-# ════════════════════════════════════════
-# SIDEBAR — PDF Upload
-# ════════════════════════════════════════
+# ── SIDEBAR ───────────────────────────────────────────────
 with st.sidebar:
     st.header("📁 Upload PDF")
-
-    uploaded_file = st.file_uploader(
-        "Choose a PDF file",
-        type="pdf"
-    )
+    uploaded_file = st.file_uploader("Choose a PDF file", type="pdf")
 
     if uploaded_file and not st.session_state.pdf_loaded:
         with st.spinner("📖 Processing PDF..."):
-            # Save uploaded file temporarily
             with tempfile.NamedTemporaryFile(
                 delete=False, suffix=".pdf"
             ) as tmp:
                 tmp.write(uploaded_file.read())
                 tmp_path = tmp.name
 
-            # Load & chunk
             loader = PyPDFLoader(tmp_path)
             pages = loader.load()
-
             splitter = RecursiveCharacterTextSplitter(
-                chunk_size=500,
-                chunk_overlap=50
+                chunk_size=500, chunk_overlap=50
             )
             chunks = splitter.split_documents(pages)
-
-            # Create vector store
             embeddings = OpenAIEmbeddings()
-
             vectorstore = FAISS.from_documents(
                 documents=chunks,
                 embedding=embeddings
-)
-
-            # Save retriever to session state
+            )
             st.session_state.retriever = vectorstore.as_retriever(
                 search_kwargs={"k": 3}
             )
             st.session_state.pdf_loaded = True
             st.session_state.pdf_name = uploaded_file.name
-
-            # Clean up temp file
             os.unlink(tmp_path)
 
         st.success(f"✅ {uploaded_file.name} loaded!")
         st.info(f"📊 {len(chunks)} chunks created")
 
-    # Show status
     if st.session_state.pdf_loaded:
         st.success(f"📄 Active: {st.session_state.pdf_name}")
-
-        # Reset button
         if st.button("🗑️ Clear & Upload New"):
             st.session_state.messages = []
             st.session_state.retriever = None
             st.session_state.pdf_loaded = False
+            st.session_state.metrics = {
+                "total_questions": 0,
+                "total_response_time": 0.0,
+                "questions_log": []
+            }
             st.rerun()
     else:
         st.warning("⬆️ Please upload a PDF to start")
 
-# ════════════════════════════════════════
-# CHAT AREA — Display message history
-# ════════════════════════════════════════
+    # ── METRICS DASHBOARD ─────────────────────────────────
+    if st.session_state.metrics["total_questions"] > 0:
+        st.divider()
+        st.header("📊 Session Metrics")
+        m = st.session_state.metrics
+        total_q = m["total_questions"]
+        avg_time = round(m["total_response_time"] / total_q, 2)
+
+        col1, col2 = st.columns(2)
+        col1.metric("❓ Questions", total_q)
+        col2.metric("⚡ Avg Time", f"{avg_time}s")
+
+        st.subheader("📋 Recent Questions")
+        for i, log in enumerate(reversed(m["questions_log"][-5:])):
+            st.caption(
+                f"• {log['question']}... "
+                f"({log['time']}s)"
+            )
+
+# ── CHAT DISPLAY ──────────────────────────────────────────
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.write(message["content"])
 
-# ════════════════════════════════════════
-# WELCOME MESSAGE — shown before any chat
-# ════════════════════════════════════════
 if not st.session_state.messages:
     if st.session_state.pdf_loaded:
         with st.chat_message("assistant"):
-            st.write(f"👋 Hi! I've loaded **{st.session_state.pdf_name}**. Ask me anything about it!")
+            st.write(
+                f"👋 Hi! I've loaded **{st.session_state.pdf_name}**."
+                " Ask me anything about it!"
+            )
     else:
         with st.chat_message("assistant"):
-            st.write("👋 Hi! Please upload a PDF from the sidebar to get started.")
+            st.write("👋 Hi! Please upload a PDF from the sidebar.")
 
-# ════════════════════════════════════════
-# CHAT INPUT
-# ════════════════════════════════════════
+# ── CHAT INPUT ────────────────────────────────────────────
 if prompt := st.chat_input(
     "Ask a question about your PDF...",
     disabled=not st.session_state.pdf_loaded
 ):
-    # Add user message to history
     st.session_state.messages.append({
-        "role": "user",
-        "content": prompt
+        "role": "user", "content": prompt
     })
-
-    # Show user message
     with st.chat_message("user"):
         st.write(prompt)
 
-    # Generate response
     with st.chat_message("assistant"):
         with st.spinner("🤔 Thinking..."):
 
-            # RAG — retrieve relevant chunks
+            start_time = time.time()
+
             docs = st.session_state.retriever.invoke(prompt)
             context = "\n\n".join([d.page_content for d in docs])
 
-            # Guardrail — check context
             if not context.strip():
-                response = "I couldn't find relevant information in the PDF for that question."
+                response = "I couldn't find relevant information in the PDF."
             else:
-                # Build prompt
                 template = ChatPromptTemplate.from_messages([
                     ("system", """You are a helpful PDF assistant.
-                    Answer questions based ONLY on the provided context.
-                    If the answer isn't in the context, say so clearly.
+                    Answer ONLY from context. Say so if not found.
                     Context: {context}"""),
                     ("human", "{question}")
                 ])
-
-                # LLM chain
                 llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
                 chain = template | llm | StrOutputParser()
                 response = chain.invoke({
@@ -176,10 +170,19 @@ if prompt := st.chat_input(
                     "question": prompt
                 })
 
+            elapsed = round(time.time() - start_time, 2)
+
+            # Update metrics
+            st.session_state.metrics["total_questions"] += 1
+            st.session_state.metrics["total_response_time"] += elapsed
+            st.session_state.metrics["questions_log"].append({
+                "question": prompt[:50],
+                "time": elapsed,
+                "sources": len(docs)
+            })
+
         st.write(response)
 
-    # Save assistant response
     st.session_state.messages.append({
-        "role": "assistant",
-        "content": response
+        "role": "assistant", "content": response
     })
